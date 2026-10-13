@@ -2,6 +2,8 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
 
@@ -164,44 +166,48 @@ static partial class Generator
     {
         readonly Dictionary<string, Resource> byName = resources.ToDictionary(r => r.Name);
 
+        // Depth-first, so each resource follows the resources its type arguments use. A cycle can't be
+        // declared in C# at all; it is left in document order for the compiler to report against the YAML.
         public List<Resource> InDependencyOrder()
         {
-            var visited = new Dictionary<Resource, bool>();
+            var visited = new HashSet<Resource>();
             var sorted = new List<Resource>();
             foreach (var resource in resources)
             {
-                Visit(resource, []);
+                Visit(resource);
             }
 
             return sorted;
 
-            void Visit(Resource resource, List<string> path)
+            void Visit(Resource resource)
             {
-                if (visited.TryGetValue(resource, out var done))
+                if (!visited.Add(resource))
                 {
-                    if (!done)
-                    {
-                        throw Error(yamlPath, resource.Node.Start, $"circular reference: {string.Join(" -> ", path.SkipWhile(p => p != resource.Name))} -> {resource.Name}.");
-                    }
-
                     return;
                 }
 
-                visited[resource] = false;
                 var dependencies = resource.Entries is [] ? References(resource.Node) : References(resource.Entries[0].Value);
-                foreach (var dependency in dependencies.Append(resource.Parent).Where(byName.ContainsKey).Select(n => byName[n]).Where(d => d != resource))
+                foreach (var dependency in dependencies.Append(resource.Parent).Where(byName.ContainsKey))
                 {
-                    Visit(dependency, [.. path, resource.Name]);
+                    Visit(byName[dependency]);
                 }
 
-                visited[resource] = true;
                 sorted.Add(resource);
             }
         }
 
         IEnumerable<string> References(YamlNode? node) => node switch
         {
-            YamlScalarNode raw when IsCode(raw) => VariablePattern().Matches(LiteralsAndComments().Replace(raw.Value!, m => m.Value[0] is '$' or '@' ? m.Value : " ")).Select(m => byName.Keys.FirstOrDefault(n => Identifier(n) == "@" + m.Value)).OfType<string>(),
+            YamlScalarNode raw when IsCode(raw) => SyntaxFactory.ParseExpression(raw.Value!).DescendantNodesAndSelf()
+                .OfType<IdentifierNameSyntax>()
+                .Where(name => name.Parent switch
+                {
+                    MemberAccessExpressionSyntax access => access.Expression == name,
+                    MemberBindingExpressionSyntax or NameColonSyntax => false,
+                    _ => true,
+                })
+                .Select(name => byName.Keys.FirstOrDefault(n => Identifier(n) == "@" + name.Identifier.ValueText))
+                .OfType<string>(),
             YamlScalarNode { Style: ScalarStyle.Plain, Value: { } value } when byName.ContainsKey(value) => [value],
             YamlSequenceNode items => items.SelectMany(References),
             YamlMappingNode map => map.Children.Values.SelectMany(References),
@@ -327,11 +333,4 @@ static partial class Generator
     [GeneratedRegex(@"\W")]
     private static partial Regex IdentifierPattern();
 
-    // Identifiers that are not member names, after string literals and comments are blanked out.
-    [GeneratedRegex(@"(?<![.\w])[A-Za-z_]\w*")]
-    private static partial Regex VariablePattern();
-
-    // Interpolated strings come first so they match whole; callers keep them because their holes can reference resources.
-    [GeneratedRegex(@"(?:\$@?|@\$)""(?:[^""\\]|\\.)*""|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|//.*|/\*[\s\S]*?\*/")]
-    private static partial Regex LiteralsAndComments();
 }
