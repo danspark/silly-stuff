@@ -1,0 +1,15 @@
+# A dependency-free Node.js server. The steps form (a sequence) keeps calls in order.
+packages:
+  - Aspire.Hosting.JavaScript
+
+resources:
+  message:
+    parameter: { value: Hello from YAML }
+
+  web:
+    - nodeApp: { appDirectory: ., scriptPath: server.js }
+    - httpEndpoint: { env: PORT }
+    - environment:
+        MESSAGE: message
+    - externalHttpEndpoints
+    - urlForEndpoint: { endpointName: http, callback: !cs 'url => url.DisplayText = "Say hello"' }

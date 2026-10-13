@@ -1,0 +1,20 @@
+# nginx serving ./site, next to Redis with Redis Insight.
+# `yaspire run` starts it; `yaspire publish -o out` turns it into a Docker Compose file.
+packages:
+  - Aspire.Hosting.Redis
+  - Aspire.Hosting.Docker
+
+resources:
+  compose: dockerComposeEnvironment
+
+  cache:
+    redis:
+    redisInsight:
+    dataVolume:
+
+  web:
+    container: { image: nginx, tag: alpine }
+    bindMount: { source: site, target: /usr/share/nginx/html, isReadOnly: true }
+    httpEndpoint: { targetPort: 80 }
+    externalHttpEndpoints: true
+    waitFor: cache
