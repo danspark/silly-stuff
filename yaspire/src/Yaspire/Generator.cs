@@ -200,6 +200,7 @@ static partial class Generator
         {
             YamlScalarNode raw when IsCode(raw) => SyntaxFactory.ParseExpression(raw.Value!).DescendantNodesAndSelf()
                 .OfType<IdentifierNameSyntax>()
+                .Where(name => !SyntaxFacts.IsInNamespaceOrTypeContext(name))
                 .Where(name => name.Parent switch
                 {
                     MemberAccessExpressionSyntax access => access.Expression == name,
