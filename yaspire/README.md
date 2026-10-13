@@ -50,7 +50,7 @@ Everything after the yaspire options is an Aspire CLI command line: `yaspire run
 
 Other commands, such as `yaspire new` or `yaspire ps`, go to the Aspire CLI unchanged. When yaspire finds no YAML file, the command also goes to the Aspire CLI unchanged.
 
-Without `-f`, yaspire looks for the YAML file the same way the Aspire CLI looks for AppHosts. It reads `appHost.path` from the nearest `aspire.config.json`, then searches the current directory for `apphost.yaml` or `apphost.yml`. The search honours `.gitignore` and skips build output and dependency folders. If it finds more than one file, yaspire asks which one to use. `-f` takes a file, or a directory to search.
+Without `-f`, yaspire looks for the YAML file the same way the Aspire CLI looks for AppHosts. It reads `appHost.path` from the nearest `aspire.config.json`, then searches the current directory for `apphost.yaml` or `apphost.yml`. Inside a Git repository the search honours `.gitignore`, and it always skips build output and dependency folders. If it finds more than one file, yaspire asks which one to use. `-f` takes a file, or a directory to search with only the folder skip list applied.
 
 Paths in the YAML are relative to the YAML file. Compiler errors point at YAML lines:
 
@@ -58,7 +58,7 @@ Paths in the YAML are relative to the YAML file. Compiler errors point at YAML l
 apphost.yaml(14,5): error CS1061: 'IResourceBuilder<RedisResource>' does not contain a definition for 'WithBogus' ...
 ```
 
-`yaspire add` and `yaspire update` change the generated AppHost's package directives, and yaspire copies those changes into the YAML's `packages` and `aspire` keys.
+`yaspire add` and `yaspire update` change the generated AppHost's package directives, and yaspire copies those changes into the YAML's `packages` and `aspire` keys. When a change can't be made in place, such as one that would edit an anchored value or add an entry to a single-string `packages` value, yaspire prints what to add instead.
 
 `.yaspire/` contains its own `.gitignore`, so the generated files stay out of source control.
 

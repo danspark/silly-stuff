@@ -16,7 +16,10 @@ static class WriteBack
         var (sdk, packages) = Directives(current);
         var yaml = File.ReadAllText(yamlPath);
         var root = Generator.Load(yaml, yamlPath);
-        var top = root is { Style: not MappingStyle.Flow, Children.Count: > 0 } ? root.Children.Keys.First().Start.Index : (long?)null;
+        // New keys go above the first key, which is only safe for a plain, unindented block mapping.
+        var top = root is { Style: not MappingStyle.Flow, Children.Count: > 0 } && root.Children.Keys.First().Start is { Column: 1 } first && yaml[(int)first.Index] != '?'
+            ? first.Index
+            : (long?)null;
         var edits = new List<(long Start, long End, string Text)>();
         var updated = new List<string>();
         var manual = new List<string>();
@@ -37,6 +40,7 @@ static class WriteBack
         }
 
         var node = Generator.Child(root, "packages");
+        var shared = node is { Anchor.IsEmpty: false };
         var items = Generator.Items(node).OfType<YamlScalarNode>().ToList();
         var added = new List<string>();
         foreach (var (name, version) in packages.Where(p => oldPackages.GetValueOrDefault(p.Key) != p.Value))
@@ -50,7 +54,7 @@ static class WriteBack
             }
             else if (item.Value != text)
             {
-                var editable = IsPlain(yaml, item);
+                var editable = !shared && IsPlain(yaml, item);
                 if (editable)
                 {
                     edits.Add((item.Start.Index, item.End.Index, text));
@@ -62,7 +66,7 @@ static class WriteBack
 
         if (added.Count > 0)
         {
-            var insertion = node switch
+            var insertion = shared ? null : node switch
             {
                 YamlSequenceNode { Style: SequenceStyle.Block, Children: [.., YamlScalarNode last] } when IsPlain(yaml, last) => AfterLastItem(yaml, last, added),
                 YamlSequenceNode { Style: SequenceStyle.Flow, Children: [.., YamlScalarNode last] } when IsPlain(yaml, last) => (last.End.Index, string.Concat(added.Select(a => $", {a}"))),
@@ -91,7 +95,7 @@ static class WriteBack
         return (updated, manual);
     }
 
-    // Only scalars written as their plain or quoted value can be replaced; anchors and aliases point elsewhere.
+    // Only scalars written as their plain or quoted value can be replaced; anchored nodes are shared with their aliases.
     static bool IsPlain(string yaml, YamlScalarNode node) =>
         yaml[(int)node.Start.Index..(int)node.End.Index].Trim() is var text
         && (text == node.Value || text == $"\"{node.Value}\"" || text == $"'{node.Value}'");

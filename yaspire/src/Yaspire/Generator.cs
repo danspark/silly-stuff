@@ -68,11 +68,19 @@ static partial class Generator
             code.AppendLine($"using {Text(import)};");
         }
 
-        var options = Child(root, "options") is YamlMappingNode map
-            ? string.Concat(map.Select(kv => $", {Pascal(Text(kv.Key))} = {emitter.Value(kv.Value)}"))
-            : "";
         var directory = Path.GetDirectoryName(Path.GetFullPath(yamlPath))!;
-        code.AppendLine($"var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions {{ Args = args, ProjectDirectory = {Literal(directory)}, DashboardApplicationName = {Literal(Path.GetFileName(directory))}{options} }});");
+        var options = new Dictionary<string, string>
+        {
+            ["Args"] = "args",
+            ["ProjectDirectory"] = Literal(directory),
+            ["DashboardApplicationName"] = Literal(Path.GetFileName(directory)),
+        };
+        foreach (var (key, value) in Child(root, "options") as YamlMappingNode ?? [])
+        {
+            options[Pascal(Text(key))] = emitter.Value(value);
+        }
+
+        code.AppendLine($"var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions {{ {string.Join(", ", options.Select(o => $"{o.Key} = {o.Value}"))} }});");
 
         foreach (var resource in emitter.InDependencyOrder())
         {
@@ -116,7 +124,7 @@ static partial class Generator
         foreach (var (key, value) in map)
         {
             var name = Text(key);
-            if (name is "builder" or "args" || resources.Any(r => r.Name == name))
+            if (name is "builder" or "args" || resources.Any(r => Identifier(r.Name) == Identifier(name)))
             {
                 throw Error(yamlPath, key.Start, $"resource name '{name}' is reserved or already used.");
             }
@@ -193,7 +201,7 @@ static partial class Generator
 
         IEnumerable<string> References(YamlNode? node) => node switch
         {
-            YamlScalarNode raw when IsCode(raw) => VariablePattern().Matches(LiteralsAndComments().Replace(raw.Value!, " ")).Select(m => byName.Keys.FirstOrDefault(n => Identifier(n) == "@" + m.Value)).OfType<string>(),
+            YamlScalarNode raw when IsCode(raw) => VariablePattern().Matches(LiteralsAndComments().Replace(raw.Value!, m => m.Value[0] is '$' or '@' ? m.Value : " ")).Select(m => byName.Keys.FirstOrDefault(n => Identifier(n) == "@" + m.Value)).OfType<string>(),
             YamlScalarNode { Style: ScalarStyle.Plain, Value: { } value } when byName.ContainsKey(value) => [value],
             YamlSequenceNode items => items.SelectMany(References),
             YamlMappingNode map => map.Children.Values.SelectMany(References),
@@ -323,6 +331,7 @@ static partial class Generator
     [GeneratedRegex(@"(?<![.\w])[A-Za-z_]\w*")]
     private static partial Regex VariablePattern();
 
-    [GeneratedRegex(@"""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|//.*|/\*[\s\S]*?\*/")]
+    // Interpolated strings come first so they match whole; callers keep them because their holes can reference resources.
+    [GeneratedRegex(@"(?:\$@?|@\$)""(?:[^""\\]|\\.)*""|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|//.*|/\*[\s\S]*?\*/")]
     private static partial Regex LiteralsAndComments();
 }
