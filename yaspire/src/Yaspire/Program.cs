@@ -33,16 +33,18 @@ static int Run(string[] args)
     // Only arguments before `--` belong to the Aspire CLI; the rest go to the AppHost.
     var separator = forwarded.IndexOf("--");
     var options = forwarded[..(separator < 0 ? forwarded.Count : separator)];
-    if (options.IndexOf("--apphost") is var apphost and >= 0 && apphost + 1 < options.Count)
+    if (options.FindIndex(o => o == "--apphost" || o.StartsWith("--apphost=", StringComparison.Ordinal)) is var apphost and >= 0)
     {
-        if (!IsYaml(options[apphost + 1]))
+        var inline = options[apphost] != "--apphost";
+        var target = inline ? options[apphost]["--apphost=".Length..] : options.ElementAtOrDefault(apphost + 1);
+        if (target is null || !IsYaml(target))
         {
             return Aspire(forwarded);
         }
 
-        file = options[apphost + 1];
-        forwarded.RemoveRange(apphost, 2);
-        options.RemoveRange(apphost, 2);
+        file = target;
+        forwarded.RemoveRange(apphost, inline ? 1 : 2);
+        options.RemoveRange(apphost, inline ? 1 : 2);
     }
 
     if (options.Intersect(["-h", "--help", "-?"]).Any() || !AspireOutput([.. options, "--help"]).Contains("--apphost"))
@@ -61,10 +63,19 @@ static int Run(string[] args)
     var exitCode = Aspire(forwarded);
 
     // Commands like `aspire add` and `aspire update` edit the AppHost's directives; keep those edits.
-    if (File.Exists(generated) && File.ReadAllText(generated) is var current && current != code
-        && WriteBack.Apply(yamlPath, code, current) is { Count: > 0 } changes)
+    if (File.Exists(generated) && File.ReadAllText(generated) is var current && current != code)
     {
-        Console.Error.WriteLine($"Updated {Path.GetRelativePath(Environment.CurrentDirectory, yamlPath)}: {string.Join(", ", changes)}");
+        var relativePath = Path.GetRelativePath(Environment.CurrentDirectory, yamlPath);
+        var (updated, manual) = WriteBack.Apply(yamlPath, code, current);
+        if (updated.Count > 0)
+        {
+            Console.Error.WriteLine($"Updated {relativePath}: {string.Join(", ", updated)}");
+        }
+
+        if (manual.Count > 0)
+        {
+            Console.Error.WriteLine($"Add these to {relativePath} by hand: {string.Join(", ", manual)}");
+        }
     }
 
     return exitCode;
@@ -137,7 +148,7 @@ static string? ConfiguredAppHost()
                 && appHost.TryGetProperty("path", out var path) && path.ValueKind is JsonValueKind.String)
             {
                 var appHostPath = Path.GetFullPath(path.GetString()!, directory.FullName);
-                return File.Exists(appHostPath) ? appHostPath : null;
+                return File.Exists(appHostPath) || Directory.Exists(appHostPath) ? appHostPath : null;
             }
         }
         catch (JsonException)

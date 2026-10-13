@@ -193,7 +193,7 @@ static partial class Generator
 
         IEnumerable<string> References(YamlNode? node) => node switch
         {
-            YamlScalarNode raw when IsCode(raw) => WordPattern().Matches(raw.Value!).Select(m => byName.Keys.FirstOrDefault(n => Identifier(n) == "@" + m.Value)).OfType<string>(),
+            YamlScalarNode raw when IsCode(raw) => VariablePattern().Matches(LiteralsAndComments().Replace(raw.Value!, " ")).Select(m => byName.Keys.FirstOrDefault(n => Identifier(n) == "@" + m.Value)).OfType<string>(),
             YamlScalarNode { Style: ScalarStyle.Plain, Value: { } value } when byName.ContainsKey(value) => [value],
             YamlSequenceNode items => items.SelectMany(References),
             YamlMappingNode map => map.Children.Values.SelectMany(References),
@@ -205,7 +205,7 @@ static partial class Generator
             var variable = Identifier(resource.Name);
             if (resource.Entries is [])
             {
-                return $"{Line(resource.Node.Start.Line, yamlPath)}\nvar {variable} = {((YamlScalarNode)resource.Node).Value};";
+                return $"{Line(resource.Node.Start.Line, yamlPath)}\nvar {variable} = {Raw((YamlScalarNode)resource.Node)};";
             }
 
             var (type, value) = resource.Entries[0];
@@ -225,18 +225,18 @@ static partial class Generator
             return calls is [] ? "" : $"{Identifier(resource.Name)}\n{string.Join('\n', calls)};\n";
         }
 
-        IEnumerable<(long Line, string Code)> Calls(string method, YamlNode key, YamlNode? value) => value switch
+        IEnumerable<(long Line, string Code)> Calls(string method, YamlNode key, YamlNode? value) => (value, Keyword(value)) switch
         {
-            null or YamlScalarNode { Tag.IsEmpty: true, Style: ScalarStyle.Plain, Value: "" or "~" or "null" or "true" } => [(key.Start.Line, $"{method}()")],
-            YamlScalarNode { Tag.IsEmpty: true, Style: ScalarStyle.Plain, Value: "false" } => [],
-            YamlSequenceNode items => items.Select(item => (item.Start.Line, $"{method}({Arguments(item, sequenceIsArguments: true)})")),
-            YamlMappingNode pairs when !IsNamedArguments(pairs) => pairs.Select(kv => (kv.Key.Start.Line, $"{method}({Key(kv.Key)}, {Value(kv.Value)})")),
+            (null, _) or (_, "null" or "true") => [(key.Start.Line, $"{method}()")],
+            (_, "false") => [],
+            (YamlSequenceNode items, _) => items.Select(item => (item.Start.Line, $"{method}({Arguments(item, sequenceIsArguments: true)})")),
+            (YamlMappingNode pairs, _) when !IsNamedArguments(pairs) => pairs.Select(kv => (kv.Key.Start.Line, $"{method}({Key(kv.Key)}, {Value(kv.Value)})")),
             _ => [(key.Start.Line, $"{method}({Arguments(value, sequenceIsArguments: false)})")],
         };
 
         string Arguments(YamlNode node, bool sequenceIsArguments) => node switch
         {
-            YamlScalarNode { Tag.IsEmpty: true, Style: ScalarStyle.Plain, Value: "" or "~" or "null" } => "",
+            _ when Keyword(node) is "null" => "",
             YamlSequenceNode items when sequenceIsArguments => string.Join(", ", items.Select(Value)),
             YamlMappingNode named when IsNamedArguments(named) => string.Join(", ", named.Select(kv => $"{Text(kv.Key)}: {Value(kv.Value)}")),
             _ => Value(node),
@@ -244,8 +244,8 @@ static partial class Generator
 
         public string Value(YamlNode node) => node switch
         {
-            YamlScalarNode raw when IsCode(raw) => raw.Value!,
-            YamlScalarNode { Tag.IsEmpty: true, Style: ScalarStyle.Plain } plain => Plain(plain.Value!),
+            YamlScalarNode raw when IsCode(raw) => Raw(raw),
+            YamlScalarNode { Tag.IsEmpty: true, Style: ScalarStyle.Plain } plain => Keyword(plain) ?? Plain(plain.Value!),
             YamlScalarNode quoted => Literal(quoted.Value!),
             YamlSequenceNode items => $"[{string.Join(", ", items.Select(Value))}]",
             YamlMappingNode properties => $"new() {{ {string.Join(", ", properties.Select(kv => $"{Pascal(Text(kv.Key))} = {Value(kv.Value)}"))} }}",
@@ -254,15 +254,12 @@ static partial class Generator
 
         string Plain(string value) => value switch
         {
-            "" or "~" or "null" or "Null" or "NULL" => "null",
-            "true" or "True" or "TRUE" => "true",
-            "false" or "False" or "FALSE" => "false",
             _ when byName.ContainsKey(value) => Identifier(value),
             _ when NumberPattern().IsMatch(value) => value,
             _ => Literal(value),
         };
 
-        static string Key(YamlNode node) => node is YamlScalarNode raw && IsCode(raw) ? raw.Value! : Literal(Text(node));
+        static string Key(YamlNode node) => node is YamlScalarNode raw && IsCode(raw) ? Raw(raw) : Literal(Text(node));
 
         // Plain camelCase keys are parameter names; anything else (ENV_VARS, quoted keys) is a name/value pair.
         static bool IsNamedArguments(YamlMappingNode map) =>
@@ -270,6 +267,18 @@ static partial class Generator
     }
 
     static bool IsCode(YamlScalarNode node) => node.Tag is { IsLocal: true, Value: "!cs" };
+
+    // A line break keeps a trailing `//` comment in the C# from swallowing the code that follows it.
+    static string Raw(YamlScalarNode node) => node.Value!.Contains("//") ? $"{node.Value}\n" : node.Value!;
+
+    /// <summary>Returns <c>null</c>, <c>true</c> or <c>false</c> for the YAML core schema spellings of those plain scalars.</summary>
+    static string? Keyword(YamlNode? node) => node is YamlScalarNode { Tag.IsEmpty: true, Style: ScalarStyle.Plain, Value: var value } ? value switch
+    {
+        "" or "~" or "null" or "Null" or "NULL" => "null",
+        "true" or "True" or "TRUE" => "true",
+        "false" or "False" or "FALSE" => "false",
+        _ => null,
+    } : null;
 
     static string Method(string key)
     {
@@ -279,7 +288,7 @@ static partial class Generator
 
     public static YamlNode? Child(YamlMappingNode map, string key) => map.Children.TryGetValue(new YamlScalarNode(key), out var value) ? value : null;
 
-    static IEnumerable<YamlNode> Items(YamlNode? node) => node switch
+    public static IEnumerable<YamlNode> Items(YamlNode? node) => node switch
     {
         null or YamlScalarNode { Value: "" } => [],
         YamlSequenceNode items => items,
@@ -310,6 +319,10 @@ static partial class Generator
     [GeneratedRegex(@"\W")]
     private static partial Regex IdentifierPattern();
 
-    [GeneratedRegex(@"\b[A-Za-z_]\w*\b")]
-    private static partial Regex WordPattern();
+    // Identifiers that are not member names, after string literals and comments are blanked out.
+    [GeneratedRegex(@"(?<![.\w])[A-Za-z_]\w*")]
+    private static partial Regex VariablePattern();
+
+    [GeneratedRegex(@"""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|//.*|/\*[\s\S]*?\*/")]
+    private static partial Regex LiteralsAndComments();
 }
