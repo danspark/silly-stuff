@@ -1,0 +1,34 @@
+# An ASP.NET Core API that counts visits in Redis and records them in PostgreSQL.
+packages:
+  - Aspire.Hosting.Redis
+  - Aspire.Hosting.PostgreSQL
+
+resources:
+  greeting:
+    parameter: { value: Hello }
+
+  postgres:
+    postgres:
+    pgAdmin:
+    dataVolume:
+    lifetime: !cs ContainerLifetime.Persistent
+    resources:
+      visits: database
+
+  cache: redis
+
+  api:
+    project: Api/Api.csproj
+    reference: [cache, visits]
+    waitFor: [cache, visits]
+    environment:
+      GREETING: greeting
+    httpHealthCheck: /health
+    externalHttpEndpoints: true
+    urlForEndpoint: { endpointName: http, callback: !cs 'url => url.DisplayText = "Count a visit"' }
+
+code: |
+  if (builder.ExecutionContext.IsPublishMode)
+  {
+      api.WithReplicas(2);
+  }
